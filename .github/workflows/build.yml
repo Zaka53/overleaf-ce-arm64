@@ -15,6 +15,10 @@ on:
         description: "Optional TeX Live mirror (tlnet URL), if the default CTAN mirror fails"
         default: ""
         required: false
+      push:
+        description: "Push the image to GHCR (uncheck for a test build)"
+        type: boolean
+        default: true
   schedule:
     # Weekly, Monday 03:00 UTC
     - cron: "0 3 * * 1"
@@ -41,6 +45,11 @@ jobs:
         with:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ inputs.ref || 'main' }}
+
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: .arm64
 
       - name: Compute image names
         id: meta
@@ -93,13 +102,11 @@ jobs:
             --tag overleaf-base:local \
             .
 
-      - name: Patch upstream Dockerfile (print yarn pack logs on failure)
+      - name: Patch upstream Dockerfile (prune yarn cache, print pack logs on failure)
         if: steps.check.outputs.skip != 'true'
         run: |
-          # yarn writes git-dependency pack logs to /tmp, which is a tmpfs mount
-          # and gone after a failure. Dump them so failures are debuggable.
-          sed -i 's#^\(\s*\)node genScript compile | bash$#\1(node genScript compile | bash) || (cat /tmp/xfs-*/pack.log 2>/dev/null; exit 1)#' server-ce/Dockerfile
-          grep -n "genScript compile" server-ce/Dockerfile
+          python3 .arm64/build/patch-dockerfile.py server-ce/Dockerfile
+          grep -n -B2 -A2 "genScript" server-ce/Dockerfile
 
       - name: Build Community Edition image
         if: steps.check.outputs.skip != 'true'
@@ -131,8 +138,27 @@ jobs:
           docker run --rm --entrypoint node "${IMAGE}:${SHORT}" --version
           docker run --rm --entrypoint bash "${IMAGE}:${SHORT}" -lc 'pdflatex --version | head -1'
 
-      - name: Push image
+      - name: Image size
         if: steps.check.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          SIZE=$(docker image inspect -f '{{.Size}}' "${IMAGE}:${SHORT}" | numfmt --to=iec)
+          echo "Image size (uncompressed): ${SIZE}"
+          echo "**Image size (uncompressed):** ${SIZE}" >> "$GITHUB_STEP_SUMMARY"
+          docker history --format '{{.Size}}\t{{.CreatedBy}}' "${IMAGE}:${SHORT}" \
+            | awk -F'\t' '$1 ~ /(MB|GB)$/' | cut -c1-160
+
+      - name: Integration test (start Overleaf, log in, compile a project)
+        if: steps.check.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: bash .arm64/build/integration-test.sh "${IMAGE}:${SHORT}"
+
+      - name: Push image
+        if: steps.check.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.push)
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           SHORT: ${{ steps.meta.outputs.short }}
