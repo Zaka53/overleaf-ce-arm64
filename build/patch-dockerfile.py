@@ -3,6 +3,9 @@
 
 - Run build/prune-yarn-cache.sh at the end of the `genScript install` and
   `genScript compile` steps (same RUN instruction, so the space is really freed).
+- Give each Yarn Classic process its own cache folder during the compile step
+  (build/yarn-classic-isolate-cache.cjs), fixing a race when Yarn 4 packs
+  several Yarn-1 git dependencies in parallel.
 - Print yarn's git-dependency pack logs if the compile step fails (they live in
   a tmpfs and are lost otherwise).
 
@@ -15,6 +18,10 @@ PRUNE_MOUNT = (
     "--mount=type=bind,source=.arm64/build/prune-yarn-cache.sh,"
     "target=/run/prune-yarn-cache.sh"
 )
+ISOLATE_MOUNT = (
+    "--mount=type=bind,source=.arm64/build/yarn-classic-isolate-cache.cjs,"
+    "target=/run/yarn-classic-isolate-cache.cjs"
+)
 
 PATCHES = [
     (
@@ -26,7 +33,9 @@ PATCHES = [
     (
         "    node genScript compile | bash\n",
         f"    {PRUNE_MOUNT} \\\n"
-        "    { node genScript compile | bash || { cat /tmp/xfs-*/pack.log 2>/dev/null; exit 1; }; } \\\n"
+        f"    {ISOLATE_MOUNT} \\\n"
+        '    { export NODE_OPTIONS="--require /run/yarn-classic-isolate-cache.cjs"; \\\n'
+        "      node genScript compile | bash || { cat /tmp/xfs-*/pack.log 2>/dev/null; exit 1; }; } \\\n"
         "    && bash /run/prune-yarn-cache.sh\n",
     ),
 ]
