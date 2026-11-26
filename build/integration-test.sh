@@ -113,10 +113,12 @@ echo "output.pdf OK"
 endlog
 
 log "Check services and logs"
-# Every runit service must be up and must not have been restarted recently
-# (a crash-looping service has a low uptime).
-docker exec overleaf bash -c 'for s in /etc/service/*; do sv status "$s"; done' | tee /dev/stderr \
-  | awk '$1 != "run:" { bad = 1 } match($0, /\) [0-9]+s/) { if (substr($0, RSTART + 2, RLENGTH - 3) + 0 < 20) bad = 1 } END { exit bad }'
+# Every enabled runit service (no `down` file, e.g. phusion's sshd is disabled)
+# must be up and must not have been restarted recently: give them 30s, then a
+# crash-looping service shows up with a low uptime.
+sleep 30
+docker exec overleaf bash -c 'for s in /etc/service/*; do [ -e "$s/down" ] || sv status "$s"; done' | tee /dev/stderr \
+  | awk '$1 != "run:" { bad = 1 } match($0, /\) [0-9]+s/) { if (substr($0, RSTART + 2, RLENGTH - 3) + 0 < 25) bad = 1 } END { exit bad }'
 
 # Module resolution errors (e.g. a pruned yarn cache entry that was still needed)
 if docker exec overleaf grep -rnE "MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND|Qualified path resolution failed|tried to access .* (but|which) it isn't declared|\.zip/node_modules.*ENOENT" /var/log/overleaf; then
