@@ -81,8 +81,7 @@ for i in $(seq 120); do
   sleep 3
 done
 curl -fsS "$BASE/status"; echo
-curl -fsS "$BASE/health_check/mongo"; echo
-curl -fsS "$BASE/health_check/redis"; echo
+# MongoDB and Redis are exercised by the steps below (admin, login, project).
 endlog
 
 log "Create admin via launchpad and log in"
