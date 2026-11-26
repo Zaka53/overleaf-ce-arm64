@@ -1,0 +1,140 @@
+name: Build Overleaf CE (arm64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream ref of overleaf/overleaf (branch or commit SHA)"
+        default: main
+        required: true
+      force:
+        description: "Build even if an image for this upstream commit already exists"
+        type: boolean
+        default: false
+      texlive_mirror:
+        description: "Optional TeX Live mirror (tlnet URL), if the default CTAN mirror fails"
+        default: ""
+        required: false
+  schedule:
+    # Weekly, Monday 03:00 UTC
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: overleaf/overleaf
+
+jobs:
+  build:
+    # Native GitHub-hosted ARM runner (free for public repositories)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    steps:
+      - name: Checkout upstream Overleaf
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Compute image names
+        id: meta
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          REV="$(git rev-parse HEAD)"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "rev=${REV}" >> "$GITHUB_OUTPUT"
+          echo "short=${REV::7}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "Upstream revision: ${REV}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if this upstream commit was already built
+        id: check
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+          FORCE: ${{ inputs.force || 'false' }}
+        run: |
+          if [ "$FORCE" != "true" ] && docker manifest inspect "${IMAGE}:${SHORT}" > /dev/null 2>&1; then
+            echo "Image ${IMAGE}:${SHORT} already exists, skipping build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build base image (sharelatex-base)
+        if: steps.check.outputs.skip != 'true'
+        env:
+          TEXLIVE_MIRROR: ${{ inputs.texlive_mirror }}
+        run: |
+          # Upstream's Makefile copies this to the build context root as well
+          cp server-ce/.dockerignore .
+          MIRROR_ARG=()
+          if [ -n "$TEXLIVE_MIRROR" ]; then
+            MIRROR_ARG=(--build-arg "TEXLIVE_MIRROR=${TEXLIVE_MIRROR}")
+          fi
+          docker build \
+            --progress=plain \
+            --pull \
+            "${MIRROR_ARG[@]}" \
+            --file server-ce/Dockerfile-base \
+            --tag overleaf-base:local \
+            .
+
+      - name: Build Community Edition image
+        if: steps.check.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          REV: ${{ steps.meta.outputs.rev }}
+          SHORT: ${{ steps.meta.outputs.short }}
+          DATE: ${{ steps.meta.outputs.date }}
+        run: |
+          docker build \
+            --progress=plain \
+            --build-arg OVERLEAF_BASE_TAG=overleaf-base:local \
+            --label "com.overleaf.ce.revision=${REV}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${REV}" \
+            --label "org.opencontainers.image.description=Overleaf Community Edition built for linux/arm64" \
+            --file server-ce/Dockerfile \
+            --tag "${IMAGE}:${SHORT}" \
+            --tag "${IMAGE}:${DATE}" \
+            .
+
+      - name: Smoke test
+        if: steps.check.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+        run: |
+          docker run --rm --entrypoint uname "${IMAGE}:${SHORT}" -m
+          docker run --rm --entrypoint node "${IMAGE}:${SHORT}" --version
+          docker run --rm --entrypoint bash "${IMAGE}:${SHORT}" -lc 'pdflatex --version | head -1'
+
+      - name: Push image
+        if: steps.check.outputs.skip != 'true'
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHORT: ${{ steps.meta.outputs.short }}
+          DATE: ${{ steps.meta.outputs.date }}
+          REF: ${{ inputs.ref || 'main' }}
+        run: |
+          docker push "${IMAGE}:${SHORT}"
+          docker push "${IMAGE}:${DATE}"
+          # Only move :latest when building upstream main
+          if [ "$REF" = "main" ]; then
+            docker tag "${IMAGE}:${SHORT}" "${IMAGE}:latest"
+            docker push "${IMAGE}:latest"
+          fi
