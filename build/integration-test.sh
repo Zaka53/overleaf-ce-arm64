@@ -64,6 +64,7 @@ docker run -d --name overleaf --network "$NET" -p "$PORT:80" \
   -e OVERLEAF_SITE_URL="$BASE" \
   -e OVERLEAF_APP_NAME="CI Test" \
   -e EMAIL_CONFIRMATION_DISABLED=true \
+  -e OVERLEAF_INVITE_TOKEN_SECRET="$(openssl rand -base64 32)" \
   "$IMAGE" > /dev/null
 endlog
 
