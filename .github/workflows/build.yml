@@ -93,6 +93,14 @@ jobs:
             --tag overleaf-base:local \
             .
 
+      - name: Patch upstream Dockerfile (print yarn pack logs on failure)
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          # yarn writes git-dependency pack logs to /tmp, which is a tmpfs mount
+          # and gone after a failure. Dump them so failures are debuggable.
+          sed -i 's#^\(\s*\)node genScript compile | bash$#\1(node genScript compile | bash) || (cat /tmp/xfs-*/pack.log 2>/dev/null; exit 1)#' server-ce/Dockerfile
+          grep -n "genScript compile" server-ce/Dockerfile
+
       - name: Build Community Edition image
         if: steps.check.outputs.skip != 'true'
         env:
