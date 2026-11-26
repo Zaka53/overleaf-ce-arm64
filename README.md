@@ -45,5 +45,5 @@ MongoDB and Redis already ship official arm64 images.
 
 - Upstream `overleaf/overleaf` has no release tags for CE versions; pin a `<sha7>` tag for reproducible deployments.
 - The image contains only TeX Live `scheme-basic` (same as upstream). Install more packages with `tlmgr` or build a derived image.
-- After the first push, make the GHCR package public under *Package settings* if you want to pull without logging in.
+- The GHCR package is linked to this repository via the `org.opencontainers.image.source` label and is public, so it can be pulled without logging in.
 - Overleaf is licensed under AGPL-3.0; this repository only provides build automation.
