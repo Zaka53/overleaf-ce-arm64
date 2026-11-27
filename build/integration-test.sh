@@ -108,8 +108,13 @@ echo "$compile" | jq '{status, outputFiles: [.outputFiles[]?.path]}'
 
 pdf_url=$(echo "$compile" | jq -r '.outputFiles[] | select(.path == "output.pdf") | .url')
 [ -n "$pdf_url" ]
-curl -fsS -b "$JAR" "$BASE$pdf_url" | head -c 5 | grep -q '%PDF-'
-echo "output.pdf OK"
+# Download completely first: piping into `head` makes curl fail with a write
+# error (exit 23) under pipefail whenever head closes the pipe early.
+pdf=$(mktemp)
+curl -fsS -b "$JAR" -o "$pdf" "$BASE$pdf_url"
+[ "$(head -c 5 "$pdf")" = "%PDF-" ]
+echo "output.pdf OK ($(stat -c %s "$pdf") bytes)"
+rm -f "$pdf"
 endlog
 
 log "Check services and logs"
